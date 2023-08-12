@@ -2,36 +2,29 @@ package framework;
 
 import org.reflections.Reflections;
 
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Properties;
 import java.util.Set;
 
 public class FWContext {
     private static List<Object> serviceObjectList = new ArrayList<>();
 
-    public void start() {
-        try {
-            Reflections reflections = new Reflections("");
-            Set<Class<?>> serviceClasses = reflections.getTypesAnnotatedWith(Service.class);
+    private static Properties properties = new Properties();
 
-            boolean hasNoparameterConstructor=false;
-            for (Class<?> serviceClass : serviceClasses) {
-                hasNoparameterConstructor = hasNoParameterConstructor(serviceClass);
-                if (hasNoparameterConstructor) {
-                    serviceObjectList.add((Object) serviceClass.getDeclaredConstructor().newInstance());
-                }
-            }
-
-                performDI();
-
-
-
-        } catch (Exception exception) {
-            exception.printStackTrace();
+    public FWContext(String propertiesFilePath) {
+        try (InputStream resourceStream = new FileInputStream(propertiesFilePath)) {
+            properties.load(resourceStream);
+//            activeProfile = properties.getProperty("profiles.active");
+        } catch (IOException e) {
+            e.printStackTrace();
         }
     }
 
@@ -45,85 +38,13 @@ public class FWContext {
         return false;
     }
 
-    public void performDI() {
-        try {
-            for (Object serviceClass : serviceObjectList) {
-                //find annotated field
-                for (Field field : serviceClass.getClass().getDeclaredFields()) {
-                    if (field.isAnnotationPresent(Autowired.class)) {
-                        //getting the object instance of type
-                        Object instance = getServiceBeanOfType(field);
-                        // Doing Injection - Make the field accessible before setting its value
-                        field.setAccessible(true);
-                        field.set(serviceClass, instance);
-                    }
-                }
+    public static Object getClassByName(String name) {
 
-            }
-        } catch (Exception exception) {
-            exception.printStackTrace();
-        }
-    }
+        Object classToReturn = null;
+        for (Object o : serviceObjectList) {
 
-
-
-    public Object getServiceBeanOfType(Field field) {
-
-        Class classImplementingTheInterface = field.getType();
-
-       String  qualifierValue = null;
-        Object service = null;
-        try {
-
-            boolean isQualifierPresent = false;
-            if(field.isAnnotationPresent(Qualifier.class)){
-                Qualifier qualifierAnnotation = field.getAnnotation(Qualifier.class);
-                qualifierValue = qualifierAnnotation.value();
-                isQualifierPresent = true;
-
-            }
-           for (Object theClass : serviceObjectList){
-
-               Class<?>[] interfaces = theClass.getClass().getInterfaces();
-
-
-               for (Class<?> theInterface:interfaces){
-
-
-
-                     if (theInterface.getName().contentEquals(classImplementingTheInterface.getName()))
-                     {
-                         Service serviceAnnotation= theClass.getClass().getAnnotation(Service.class);
-                         String serviceName = serviceAnnotation.value();
-
-                         if(isQualifierPresent){
-
-                             if(qualifierValue.equals(serviceName)){
-                                 service = theClass;
-                                 return service ;
-                             }
-
-                         } else {
-                             service = theClass;
-                             return service ;
-                         }
-
-                     }
-               }
-           }
-        } catch (Exception exception) {
-            exception.printStackTrace();
-        }
-        return service;
-    }
-
-    public static Object getClassByName (String name){
-
-        Object classToReturn = null ;
-        for(Object o : serviceObjectList){
-
-            if(o.getClass().getName().equals(name)){
-                return o ;
+            if (o.getClass().getName().equals(name)) {
+                return o;
             }
 
         }
@@ -146,8 +67,50 @@ public class FWContext {
                 }
             }
         }
+
+        injectValues(targetObject); // for field injection
     }
 
+    private static void injectValues(Object bean) {
+        Field[] fields = bean.getClass().getDeclaredFields();
+        for (Field field : fields) {
+            if (field.isAnnotationPresent(Value.class)) {
+                Value valueAnnotation = field.getAnnotation(Value.class);
+                String key = valueAnnotation.value();
+                key = key.replace("${", "").replace("}", ""); // Remove "${" and "}" characters
+
+                String propertyValue = properties.getProperty(key);
+
+                if (propertyValue != null) {
+                    field.setAccessible(true);
+                    try {
+                        Object convertedValue = convertValue(propertyValue, field.getType());
+                        field.set(bean, convertedValue);
+                    } catch (IllegalAccessException e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
+        }
+    }
+
+
+    private static Object convertValue(String propertyValue, Class<?> targetType) {
+        if (targetType.equals(String.class)) {
+            return propertyValue;
+        } else if (targetType.equals(int.class) || targetType.equals(Integer.class)) {
+            return Integer.parseInt(propertyValue);
+        } else if (targetType.equals(long.class) || targetType.equals(Long.class)) {
+            return Long.parseLong(propertyValue);
+        } else if (targetType.equals(float.class) || targetType.equals(Float.class)) {
+            return Float.parseFloat(propertyValue);
+        } else if (targetType.equals(double.class) || targetType.equals(Double.class)) {
+            return Double.parseDouble(propertyValue);
+        } else if (targetType.equals(boolean.class) || targetType.equals(Boolean.class)) {
+            return Boolean.parseBoolean(propertyValue);
+        }
+        return null;
+    }
     private static boolean isSetterMethod(Method method) {
         return method.getName().startsWith("set") &&
                 method.getParameterCount() == 1 &&
@@ -187,9 +150,99 @@ public class FWContext {
         try {
             // Assuming each dependency type has a no-argument constructor
             return dependencyType.getDeclaredConstructor().newInstance();
-        } catch (InstantiationException | IllegalAccessException | NoSuchMethodException | InvocationTargetException e) {
+        } catch (InstantiationException | IllegalAccessException | NoSuchMethodException |
+                 InvocationTargetException e) {
             e.printStackTrace();
         }
         return null;
+    }
+
+    public void start() {
+        try {
+            Reflections reflections = new Reflections("");
+            Set<Class<?>> serviceClasses = reflections.getTypesAnnotatedWith(Service.class);
+
+            boolean hasNoparameterConstructor = false;
+            for (Class<?> serviceClass : serviceClasses) {
+                hasNoparameterConstructor = hasNoParameterConstructor(serviceClass);
+                if (hasNoparameterConstructor) {
+                    serviceObjectList.add((Object) serviceClass.getDeclaredConstructor().newInstance());
+                }
+            }
+
+            performDI();
+
+
+        } catch (Exception exception) {
+            exception.printStackTrace();
+        }
+    }
+
+    public void performDI() {
+        try {
+            for (Object serviceClass : serviceObjectList) {
+                //find annotated field
+                for (Field field : serviceClass.getClass().getDeclaredFields()) {
+                    if (field.isAnnotationPresent(Autowired.class)) {
+                        //getting the object instance of type
+                        Object instance = getServiceBeanOfType(field);
+                        // Doing Injection - Make the field accessible before setting its value
+                        field.setAccessible(true);
+                        field.set(serviceClass, instance);
+                    }
+                }
+
+            }
+        } catch (Exception exception) {
+            exception.printStackTrace();
+        }
+    }
+
+    public Object getServiceBeanOfType(Field field) {
+
+        Class classImplementingTheInterface = field.getType();
+
+        String qualifierValue = null;
+        Object service = null;
+        try {
+
+            boolean isQualifierPresent = false;
+            if (field.isAnnotationPresent(Qualifier.class)) {
+                Qualifier qualifierAnnotation = field.getAnnotation(Qualifier.class);
+                qualifierValue = qualifierAnnotation.value();
+                isQualifierPresent = true;
+
+            }
+            for (Object theClass : serviceObjectList) {
+
+                Class<?>[] interfaces = theClass.getClass().getInterfaces();
+
+
+                for (Class<?> theInterface : interfaces) {
+
+
+                    if (theInterface.getName().contentEquals(classImplementingTheInterface.getName())) {
+                        Service serviceAnnotation = theClass.getClass().getAnnotation(Service.class);
+                        String serviceName = serviceAnnotation.value();
+
+                        if (isQualifierPresent) {
+
+                            if (qualifierValue.equals(serviceName)) {
+                                service = theClass;
+                                return service;
+                            }
+
+                        } else {
+                            service = theClass;
+                            return service;
+                        }
+
+                    }
+                }
+            }
+        } catch (Exception exception) {
+            exception.printStackTrace();
+        }
+        return service;
     }
 }
