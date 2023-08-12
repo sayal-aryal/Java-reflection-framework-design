@@ -10,11 +10,10 @@ public class CustomerService implements ICustomerService {
     @Autowired
     @Qualifier(value="accountService")
     private IAccountService accountService;
-
     private IBankService bankService;
 
+
     @Autowired
-    @Qualifier(value = "bankService", type = BankService.class)
     public void setBankService(IBankService bankService) {
         this.bankService = bankService;
     }
